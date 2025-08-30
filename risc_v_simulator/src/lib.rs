@@ -9,6 +9,7 @@ pub mod mmio;
 pub mod mmu;
 mod qol;
 pub mod runner;
+pub mod signature_extraction;
 pub mod sim;
 pub mod utils;
 

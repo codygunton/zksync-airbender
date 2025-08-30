@@ -27,7 +27,7 @@ where
     S: RiscV32MachineSetup,
     C: MachineConfig,
 {
-    pub(crate) machine: S::M,
+    pub machine: S::M,
     // pub(crate) memory_source: MS,
     // pub(crate) memory_tracer: TR,
     // pub(crate) mmu: MMU,

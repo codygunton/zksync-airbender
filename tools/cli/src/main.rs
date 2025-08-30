@@ -16,7 +16,7 @@ use execution_utils::{
 };
 use reqwest::blocking::Client;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{fs, io::Write, iter};
 
 use prover::{
@@ -29,6 +29,7 @@ use prover::{
             IWithoutByteAccessIsaConfigWithDelegation,
         },
         runner::run_simple_with_entry_point_and_non_determimism_source_for_config,
+        signature_extraction,
         sim::SimulatorConfig,
     },
 };
@@ -119,7 +120,7 @@ enum Commands {
         program_proof: Option<String>,
     },
     Run {
-        #[arg(short, long)]
+        #[arg(short, long, alias = "program")]
         bin: String,
         // Either load data from the input file or from RPC
         #[clap(flatten)]
@@ -133,6 +134,14 @@ enum Commands {
 
         #[arg(long, value_enum, default_value = "standard")]
         machine: Machine,
+        
+        /// Path to write signature file. If provided, extract RISCOF test signatures from memory after simulation.
+        #[arg(long)]
+        signatures: Option<PathBuf>,
+        
+        /// Path to ELF file for signature extraction (optional, defaults to bin)
+        #[arg(long)]
+        elf: Option<String>,
     },
 
     /// Generates verification key hash, for a given binary.
@@ -342,10 +351,12 @@ fn main() {
             input,
             expected_results,
             machine,
+            signatures,
+            elf,
         } => {
             let input_hex = fetch_input_hex_string(input).expect("Failed to fetch");
 
-            run_binary(bin, cycles, &input_hex, expected_results, machine);
+            run_binary(bin, cycles, &input_hex, expected_results, machine, signatures, elf);
         }
         Commands::GenerateVk {
             bin,
@@ -636,53 +647,152 @@ fn run_binary(
     input_hex: &Option<String>,
     expected_results: &Option<Vec<u32>>,
     machine: &Machine,
+    signatures: &Option<PathBuf>,
+    elf_path: &Option<String>,
 ) {
-    let config = SimulatorConfig {
+    let create_config = || SimulatorConfig {
         bin: prover::risc_v_simulator::sim::BinarySource::Path(bin_path.into()),
         cycles: cycles.unwrap_or(DEFAULT_CYCLES),
         entry_point: 0,
         diagnostics: None,
     };
-    let mut non_determinism_source = QuasiUARTSource::default();
-    if let Some(input_hex) = input_hex {
-        let data = u32_from_hex_string(input_hex);
-        for entry in data {
-            non_determinism_source.oracle.push_back(entry);
+    
+    let mut create_non_determinism_source = || {
+        let mut source = QuasiUARTSource::default();
+        if let Some(input_hex) = input_hex {
+            let data = u32_from_hex_string(input_hex);
+            for entry in data {
+                source.oracle.push_back(entry);
+            }
         }
-    }
+        source
+    };
 
-    let registers = match machine {
-        Machine::Standard => {
-            let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
-                _,
-                IMStandardIsaConfig,
-            >(config, non_determinism_source);
-
-            result.state.registers
+    // Read the ELF data for signature extraction (use elf_path if provided, otherwise bin_path)
+    let elf_data = if let Some(elf_file) = elf_path {
+        fs::read(elf_file).unwrap_or_default()
+    } else {
+        fs::read(bin_path).unwrap_or_default()
+    };
+    
+    let registers = if let Some(sig_path) = signatures {
+        // Use the new signature extraction runner
+        use prover::risc_v_simulator::runner::signatures::run_with_signature_extraction;
+        
+        match machine {
+            Machine::Standard => {
+                let result = run_with_signature_extraction::<_, IMStandardIsaConfig>(
+                    create_config(), create_non_determinism_source(), &elf_data, sig_path
+                );
+                match result {
+                    Ok(regs) => {
+                        let mut registers = [0u32; 32];
+                        registers[10..26].copy_from_slice(&regs);
+                        registers
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Signature extraction failed: {}", e);
+                        // Fallback to regular execution
+                        let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
+                            _, IMStandardIsaConfig
+                        >(create_config(), QuasiUARTSource::default());
+                        result.state.registers
+                    }
+                }
+            }
+            Machine::Reduced => {
+                let result = run_with_signature_extraction::<_, IWithoutByteAccessIsaConfigWithDelegation>(
+                    create_config(), create_non_determinism_source(), &elf_data, sig_path
+                );
+                match result {
+                    Ok(regs) => {
+                        let mut registers = [0u32; 32];
+                        registers[10..26].copy_from_slice(&regs);
+                        registers
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Signature extraction failed: {}", e);
+                        let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
+                            _, IWithoutByteAccessIsaConfigWithDelegation
+                        >(create_config(), QuasiUARTSource::default());
+                        result.state.registers
+                    }
+                }
+            }
+            Machine::ReducedLog23 => {
+                let result = run_with_signature_extraction::<_, IWithoutByteAccessIsaConfigWithDelegation>(
+                    create_config(), create_non_determinism_source(), &elf_data, sig_path
+                );
+                match result {
+                    Ok(regs) => {
+                        let mut registers = [0u32; 32];
+                        registers[10..26].copy_from_slice(&regs);
+                        registers
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Signature extraction failed: {}", e);
+                        let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
+                            _, IWithoutByteAccessIsaConfigWithDelegation
+                        >(create_config(), QuasiUARTSource::default());
+                        result.state.registers
+                    }
+                }
+            }
+            Machine::ReducedFinal => {
+                let result = run_with_signature_extraction::<_, IWithoutByteAccessIsaConfig>(
+                    create_config(), create_non_determinism_source(), &elf_data, sig_path
+                );
+                match result {
+                    Ok(regs) => {
+                        let mut registers = [0u32; 32];
+                        registers[10..26].copy_from_slice(&regs);
+                        registers
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Signature extraction failed: {}", e);
+                        let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
+                            _, IWithoutByteAccessIsaConfig
+                        >(create_config(), QuasiUARTSource::default());
+                        result.state.registers
+                    }
+                }
+            }
         }
-        Machine::Reduced => {
-            let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
-                _,
-                IWithoutByteAccessIsaConfigWithDelegation,
-            >(config, non_determinism_source);
+    } else {
+        // Original code path when no signature extraction is needed
+        match machine {
+            Machine::Standard => {
+                let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
+                    _,
+                    IMStandardIsaConfig,
+                >(create_config(), create_non_determinism_source());
 
-            result.state.registers
-        }
-        Machine::ReducedLog23 => {
-            let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
-                _,
-                IWithoutByteAccessIsaConfigWithDelegation,
-            >(config, non_determinism_source);
+                result.state.registers
+            }
+            Machine::Reduced => {
+                let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
+                    _,
+                    IWithoutByteAccessIsaConfigWithDelegation,
+                >(create_config(), create_non_determinism_source());
 
-            result.state.registers
-        }
-        Machine::ReducedFinal => {
-            let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
-                _,
-                IWithoutByteAccessIsaConfig,
-            >(config, non_determinism_source);
+                result.state.registers
+            }
+            Machine::ReducedLog23 => {
+                let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
+                    _,
+                    IWithoutByteAccessIsaConfigWithDelegation,
+                >(create_config(), create_non_determinism_source());
 
-            result.state.registers
+                result.state.registers
+            }
+            Machine::ReducedFinal => {
+                let result = run_simple_with_entry_point_and_non_determimism_source_for_config::<
+                    _,
+                    IWithoutByteAccessIsaConfig,
+                >(create_config(), create_non_determinism_source());
+
+                result.state.registers
+            }
         }
     };
 
@@ -710,4 +820,5 @@ fn run_binary(
             }
         }
     }
+    
 }

@@ -17,6 +17,7 @@ addr2line = "0.22"
 object = "*"
 memmap2 = "*"
 inferno = "*"
+elf = "0.7"
 blake2s_u32 = { workspace = true, optional = true }
 cs = { workspace = true, default-features = false }
 field = { workspace = true, optional = true }

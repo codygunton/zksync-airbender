@@ -20,6 +20,8 @@ use crate::sim::RunResultMeasurements;
 use crate::sim::Simulator;
 use crate::sim::SimulatorConfig;
 
+pub mod signatures;
+
 pub const DEFAULT_ENTRY_POINT: u32 = 0x01000000;
 pub const CUSTOM_ENTRY_POINT: u32 = 0;
 

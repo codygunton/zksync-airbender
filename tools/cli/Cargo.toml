@@ -20,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 prover = { workspace = true, features = ["prover"] }
 risc_v_cycles = { workspace = true }
+risc_v_simulator = { workspace = true }
 trace_and_split = { workspace = true }
 setups = { workspace = true }
 serde = { workspace = true }
