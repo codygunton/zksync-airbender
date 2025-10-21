@@ -186,6 +186,7 @@ pub fn get_decoder_table_for_rom_bound<
 #[cfg(feature = "witness_eval_fn")]
 mod sealed {
     use crate::field::Mersenne31Field;
+    use prover::cs::cs::placeholder::Placeholder;
     use prover::cs::cs::witness_placer::scalar_witness_type_set::ScalarWitnessTypeSet;
     use prover::cs::cs::witness_placer::WitnessTypeSet;
     use prover::cs::cs::witness_placer::{
