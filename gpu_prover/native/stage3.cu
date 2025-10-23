@@ -552,8 +552,8 @@ EXTERN __launch_bounds__(128, 8) __global__ void ab_hardcoded_constraints_kernel
     e4 denom = (helpers++).get();
     denom = e4::add(denom, e4::mul(alpha, memory_cols.get_at_col(metadata.delegation_type_col)));
     denom = e4::add(denom, e4::mul((helpers++).get(), memory_cols.get_at_col(metadata.abi_mem_offset_high_col)));
-    denom = e4::add(denom, e4::mul((helpers++).get(), setup_cols.get_at_col(metadata.timestamp_setup_col)));
-    denom = e4::add(denom, e4::mul((helpers++).get(), setup_cols.get_at_col(metadata.timestamp_setup_col + 1)));
+    denom = e4::add(denom, e4::mul((helpers++).get(), setup_cols.get_at_col(metadata.timestamp_col)));
+    denom = e4::add(denom, e4::mul((helpers++).get(), setup_cols.get_at_col(metadata.timestamp_col + 1)));
     const e4 e4_arg = stage_2_e4_cols.get_at_col(delegation_aux_poly_col);
     acc_quadratic = e4::add(acc_quadratic, e4::mul(e4_arg, denom));
   }
@@ -633,8 +633,8 @@ EXTERN __launch_bounds__(128, 8) __global__ void ab_hardcoded_constraints_kernel
 
     // Now enforce access contributions to global memory accumulator
     // Some write timestamp limb contributions are common across accesses:
-    const bf write_timestamp_in_setup_low = setup_cols.get_at_col(shuffle_ram_accesses.write_timestamp_in_setup_start);
-    const bf write_timestamp_in_setup_high = setup_cols.get_at_col(shuffle_ram_accesses.write_timestamp_in_setup_start + 1);
+    const bf write_timestamp_for_shuffle_ram_low = setup_cols.get_at_col(shuffle_ram_accesses.write_timestamp_start);
+    const bf write_timestamp_for_shuffle_ram_high = setup_cols.get_at_col(shuffle_ram_accesses.write_timestamp_start + 1);
 #pragma unroll 1
     for (unsigned i = 0; i < shuffle_ram_accesses.num_accesses; i++) {
       const auto &access = shuffle_ram_accesses.accesses[i];
@@ -683,8 +683,8 @@ EXTERN __launch_bounds__(128, 8) __global__ void ab_hardcoded_constraints_kernel
       const bf read_timestamp_high = memory_cols.get_at_col(access.read_timestamp_start + 1);
       denom = e4::add(denom, e4::mul(timestamp_high_helper, read_timestamp_high));
 
-      numerator = e4::add(numerator, e4::mul(timestamp_low_helper, write_timestamp_in_setup_low));
-      numerator = e4::add(numerator, e4::mul(timestamp_high_helper, write_timestamp_in_setup_high));
+      numerator = e4::add(numerator, e4::mul(timestamp_low_helper, write_timestamp_for_shuffle_ram_low));
+      numerator = e4::add(numerator, e4::mul(timestamp_high_helper, write_timestamp_for_shuffle_ram_high));
 
       // adjusted constant contributions
       denom = e4::add(denom, (helpers++).get());

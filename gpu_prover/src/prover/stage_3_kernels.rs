@@ -1313,7 +1313,7 @@ impl StaticMetadata {
                 num_helpers_expected += 7;
             }
         }
-        let memory_grand_product_col = get_grand_product_col(circuit);
+        let (_, memory_grand_product_col) = get_grand_product_src_dst_cols(circuit, false);
         // Prepare static layout data for constraints on all rows except the last two
         let state_linkage_constraints = StateLinkageConstraints::new(circuit);
         // Layout data for boundary constraints (first row and second-to-last row)
@@ -2196,7 +2196,6 @@ mod tests {
             public_inputs,
             twiddles,
             lde_precomputations,
-            table_driver: _,
             lookup_mapping: _,
             log_n,
             circuit_sequence,
