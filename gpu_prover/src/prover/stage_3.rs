@@ -4,6 +4,7 @@ use super::setup::SetupPrecomputations;
 use super::stage_1::StageOneOutput;
 use super::stage_2::StageTwoOutput;
 use super::stage_3_kernels::*;
+use super::stage_3_utils::*;
 use super::trace_holder::{TraceHolder, TreesCacheMode};
 use super::{BF, E4};
 use crate::allocator::tracker::AllocationPlacement;
@@ -98,7 +99,7 @@ impl StageThreeOutput {
         let omega = PRECOMPUTATIONS.omegas[omega_index];
         let omega_inv = PRECOMPUTATIONS.omegas_inv[omega_index];
         let static_metadata =
-            StaticMetadata::new(tau, omega_inv, cached_data, &circuit, log_domain_size);
+            StaticMetadata::new(tau, omega_inv, cached_data, &circuit, false, log_domain_size);
         let static_metadata_clone = static_metadata.clone();
         let get_challenges_and_helpers_fn = move || unsafe {
             let mut transcript_challenges =
@@ -137,6 +138,7 @@ impl StageThreeOutput {
                 &beta_powers,
                 omega,
                 stage_2_lookup_challenges_accessor.get(),
+                None,
                 &cached_data_clone,
                 &circuit_clone,
                 &aux_boundary_values,

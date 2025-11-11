@@ -24,7 +24,7 @@ use super::*;
 
 const SUPPORT_SIGNED: bool = false;
 const INITIAL_PC: u32 = 0;
-const NUM_INIT_AND_TEARDOWN_SETS: usize = 16;
+const NUM_INIT_AND_TEARDOWN_SETS: usize = 6;
 const NUM_DELEGATION_CYCLES: usize = (1 << 20) - 1;
 
 pub(crate) unsafe fn read_u32(trace_row: &[Mersenne31Field], columns: ColumnSet<2>) -> u32 {
@@ -367,7 +367,7 @@ fn run_basic_unrolled_test_with_word_specialization() {
 }
 
 pub fn run_basic_unrolled_test_with_word_specialization_impl(
-    maybe_gpu_unrolled_comparison_hook: Option<Box<dyn Fn(&GpuUnrolledComparisonArgs)>>,
+    maybe_gpu_unrolled_comparison_hook: Option<Box<dyn Fn(&GpuComparisonArgs)>>,
     maybe_gpu_delegation_comparison_hook: Option<Box<dyn Fn(&GpuComparisonArgs)>>,
 ) {
     // NOTE: these constants must match with ones used in CS crate to produce
@@ -860,7 +860,7 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
         );
 
         if let Some(ref gpu_comparison_hook) = maybe_gpu_unrolled_comparison_hook {
-            let gpu_comparison_args = GpuUnrolledComparisonArgs {
+            let gpu_comparison_args = GpuComparisonArgs {
                 circuit: &add_sub_circuit,
                 setup: &setup,
                 external_challenges: &external_challenges,
@@ -870,7 +870,9 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
                 lde_precomputations: &lde_precomputations,
                 lookup_mapping: lookup_mapping_for_gpu.unwrap(),
                 log_n: TRACE_LEN_LOG2,
+                circuit_sequence: None,
                 delegation_processing_type: None,
+                is_unrolled: true,
                 prover_data: &prover_data,
             };
             gpu_comparison_hook(&gpu_comparison_args);
@@ -1011,7 +1013,7 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
         serialize_to_file_if_not_gpu_comparison(&proof, "jump_branch_slt_unrolled_proof.json");
 
         if let Some(ref gpu_comparison_hook) = maybe_gpu_unrolled_comparison_hook {
-            let gpu_comparison_args = GpuUnrolledComparisonArgs {
+            let gpu_comparison_args = GpuComparisonArgs {
                 circuit: &jump_branch_circuit,
                 setup: &setup,
                 external_challenges: &external_challenges,
@@ -1021,7 +1023,9 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
                 lde_precomputations: &lde_precomputations,
                 lookup_mapping: lookup_mapping_for_gpu.unwrap(),
                 log_n: TRACE_LEN_LOG2,
+                circuit_sequence: None,
                 delegation_processing_type: None,
+                is_unrolled: true,
                 prover_data: &prover_data,
             };
             gpu_comparison_hook(&gpu_comparison_args);
@@ -1179,7 +1183,7 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
         serialize_to_file_if_not_gpu_comparison(&proof, "shift_binop_csrrw_unrolled_proof.json");
 
         if let Some(ref gpu_comparison_hook) = maybe_gpu_unrolled_comparison_hook {
-            let gpu_comparison_args = GpuUnrolledComparisonArgs {
+            let gpu_comparison_args = GpuComparisonArgs {
                 circuit: &shift_binop_csrrw_circuit,
                 setup: &setup,
                 external_challenges: &external_challenges,
@@ -1189,7 +1193,9 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
                 lde_precomputations: &lde_precomputations,
                 lookup_mapping: lookup_mapping_for_gpu.unwrap(),
                 log_n: TRACE_LEN_LOG2,
+                circuit_sequence: None,
                 delegation_processing_type: None,
+                is_unrolled: true,
                 prover_data: &prover_data,
             };
             gpu_comparison_hook(&gpu_comparison_args);
@@ -1337,7 +1343,7 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
         assert!(proof.delegation_argument_accumulator.is_none());
 
         if let Some(ref gpu_comparison_hook) = maybe_gpu_unrolled_comparison_hook {
-            let gpu_comparison_args = GpuUnrolledComparisonArgs {
+            let gpu_comparison_args = GpuComparisonArgs {
                 circuit: &mul_div_circuit,
                 setup: &setup,
                 external_challenges: &external_challenges,
@@ -1347,7 +1353,9 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
                 lde_precomputations: &lde_precomputations,
                 lookup_mapping: lookup_mapping_for_gpu.unwrap(),
                 log_n: TRACE_LEN_LOG2,
+                circuit_sequence: None,
                 delegation_processing_type: None,
+                is_unrolled: true,
                 prover_data: &prover_data,
             };
             gpu_comparison_hook(&gpu_comparison_args);
@@ -1504,7 +1512,7 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
         assert!(proof.delegation_argument_accumulator.is_none());
 
         if let Some(ref gpu_comparison_hook) = maybe_gpu_unrolled_comparison_hook {
-            let gpu_comparison_args = GpuUnrolledComparisonArgs {
+            let gpu_comparison_args = GpuComparisonArgs {
                 circuit: &word_load_store_circuit,
                 setup: &setup,
                 external_challenges: &external_challenges,
@@ -1514,7 +1522,9 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
                 lde_precomputations: &lde_precomputations,
                 lookup_mapping: lookup_mapping_for_gpu.unwrap(),
                 log_n: TRACE_LEN_LOG2,
+                circuit_sequence: None,
                 delegation_processing_type: None,
+                is_unrolled: true,
                 prover_data: &prover_data,
             };
             gpu_comparison_hook(&gpu_comparison_args);
@@ -1673,7 +1683,7 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
         );
 
         if let Some(ref gpu_comparison_hook) = maybe_gpu_unrolled_comparison_hook {
-            let gpu_comparison_args = GpuUnrolledComparisonArgs {
+            let gpu_comparison_args = GpuComparisonArgs {
                 circuit: &subword_load_store_circuit,
                 setup: &setup,
                 external_challenges: &external_challenges,
@@ -1683,7 +1693,9 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
                 lde_precomputations: &lde_precomputations,
                 lookup_mapping: lookup_mapping_for_gpu.unwrap(),
                 log_n: TRACE_LEN_LOG2,
+                circuit_sequence: None,
                 delegation_processing_type: None,
+                is_unrolled: true,
                 prover_data: &prover_data,
             };
             gpu_comparison_hook(&gpu_comparison_args);
@@ -1802,7 +1814,7 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
         serialize_to_file_if_not_gpu_comparison(&proof, "inits_and_teardowns_unrolled_proof.json");
 
         if let Some(ref gpu_comparison_hook) = maybe_gpu_unrolled_comparison_hook {
-            let gpu_comparison_args = GpuUnrolledComparisonArgs {
+            let gpu_comparison_args = GpuComparisonArgs {
                 circuit: &inits_and_teardowns_circuit,
                 setup: &setup,
                 external_challenges: &external_challenges,
@@ -1812,7 +1824,9 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
                 lde_precomputations: &lde_precomputations,
                 lookup_mapping: lookup_mapping_for_gpu.unwrap(),
                 log_n: TRACE_LEN_LOG2,
+                circuit_sequence: None,
                 delegation_processing_type: None,
+                is_unrolled: true,
                 prover_data: &prover_data,
             };
             gpu_comparison_hook(&gpu_comparison_args);
@@ -1960,14 +1974,16 @@ pub fn run_basic_unrolled_test_with_word_specialization_impl(
                 let gpu_comparison_args = GpuComparisonArgs {
                     circuit: &circuit,
                     setup: &setup,
-                    external_values: &external_values,
+                    external_challenges: &external_values.challenges,
+                    aux_boundary_values: &[external_values.aux_boundary_values],
                     public_inputs: &vec![],
                     twiddles: &twiddles,
                     lde_precomputations: &lde_precomputations,
                     lookup_mapping: lookup_mapping_for_gpu.unwrap(),
                     log_n: trace_len.trailing_zeros() as usize,
-                    circuit_sequence: 0,
+                    circuit_sequence: None,
                     delegation_processing_type: Some(delegation_type),
+                    is_unrolled: false,
                     prover_data: &prover_data,
                 };
                 gpu_comparison_hook(&gpu_comparison_args);
