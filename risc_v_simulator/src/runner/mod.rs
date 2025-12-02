@@ -154,3 +154,97 @@ fn read_bin<P: AsRef<Path>>(path: P) -> Vec<u8> {
 
     buffer
 }
+
+pub fn run_with_riscof_signature_extraction<S, C>(
+    config: SimulatorConfig,
+    non_determinism_source: S,
+    elf_data: &[u8],
+    signature_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: NonDeterminismCSRSource<VectorMemoryImpl>,
+    C: MachineConfig,
+{
+    use std::fs::File;
+    use std::io::Write;
+
+    let setup = BaselineWithND::<_, C>::new(non_determinism_source);
+    let mut sim = Simulator::<_, C>::new(config, setup);
+    sim.run(|_, _| {}, |_, _| {});
+
+    match find_signature_bounds(elf_data) {
+        Ok((begin, end)) => {
+            let memory = &sim.machine.memory_source;
+            let signatures = collect_signatures(memory, begin, end)?;
+            write_signatures(&signatures, signature_path)?;
+        }
+        Err(e) => {
+            eprintln!("{}", e);
+            let mut file = File::create(signature_path)?;
+            writeln!(file, "{}", e)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn find_signature_bounds(elf_data: &[u8]) -> Result<(u64, u64), String> {
+    use object::{Object, ObjectSymbol};
+
+    let elf = object::File::parse(elf_data)
+        .map_err(|e| format!("Failed to parse ELF: {}", e))?;
+
+    let mut begin = None;
+    let mut end = None;
+
+    for symbol in elf.symbols() {
+        if let Ok(name) = symbol.name() {
+            if name == "begin_signature" {
+                begin = Some(symbol.address());
+            } else if name == "end_signature" {
+                end = Some(symbol.address());
+            }
+            if begin.is_some() && end.is_some() {
+                break;
+            }
+        }
+    }
+
+    match (begin, end) {
+        (Some(b), Some(e)) => Ok((b, e)),
+        (None, _) => Err("Symbol 'begin_signature' not found".to_string()),
+        (_, None) => Err("Symbol 'end_signature' not found".to_string()),
+    }
+}
+
+fn collect_signatures(memory: &VectorMemoryImpl, begin: u64, end: u64) -> Result<Vec<u32>, String> {
+    use crate::abstractions::memory::AccessType;
+    use crate::cycle::status_registers::TrapReason;
+
+    let word_count = ((end - begin) / 4) as usize;
+    let mut signatures = Vec::with_capacity(word_count);
+    let mut addr = begin;
+
+    while addr < end {
+        let mut trap = TrapReason::NoTrap;
+        let word = memory.get(addr, AccessType::MemLoad, &mut trap);
+        if trap != TrapReason::NoTrap {
+            return Err(format!("Memory trap at 0x{:x}: {:?}", addr, trap));
+        }
+        signatures.push(word);
+        addr += 4;
+    }
+
+    Ok(signatures)
+}
+
+fn write_signatures(signatures: &[u32], path: &Path) -> Result<(), std::io::Error> {
+    use std::fs::File;
+    use std::io::Write;
+
+    let mut file = File::create(path)?;
+    for &sig in signatures {
+        writeln!(file, "{:08x}", sig)?;
+    }
+    Ok(())
+}

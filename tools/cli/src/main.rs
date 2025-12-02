@@ -17,7 +17,7 @@ use execution_utils::{
 };
 use reqwest::blocking::Client;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{fs, io::Write, iter};
 
 use prover::{
@@ -203,6 +203,24 @@ enum Commands {
         #[arg(long, value_enum, default_value = "use-reduced-log23-machine")]
         mode: RecursionStrategy,
     },
+
+    /// Execute RISCOF-style test and write sigantures to a file
+    #[command(hide = true)]
+    RunForRiscof {
+        /// Binary file to execute
+        #[arg(short, long)]
+        bin: String,
+        /// ELF file for extracting signature symbols
+        #[arg(long)]
+        elf: String,
+        /// Output path for signature file
+        #[arg(long)]
+        signatures: PathBuf,
+        /// Number of riscV cycles to run. 100_000 if not set.
+        #[arg(long)]
+        cycles: Option<usize>,
+    },
+
 }
 
 fn fetch_data_from_json_rpc(url: &str) -> Result<Option<String>, reqwest::Error> {
@@ -369,6 +387,14 @@ fn main() {
             let input_data = fetch_input_data(input).expect("Failed to fetch");
 
             run_binary(bin, cycles, input_data, expected_results, machine);
+        }
+        Commands::RunForRiscof {
+            bin,
+            elf,
+            signatures,
+            cycles,
+        } => {
+            run_for_riscof_binary(&bin, &elf, &signatures, cycles);
         }
         Commands::GenerateVk {
             bin,
@@ -733,6 +759,41 @@ fn run_binary(
                     i, a, b
                 );
             }
+        }
+    }
+}
+
+fn run_for_riscof_binary(
+    bin_path: &str,
+    elf_path: &str,
+    signatures: &Path,
+    cycles: &Option<usize>,
+) {
+    use prover::risc_v_simulator::runner;
+
+    let cycles = cycles.unwrap_or(100_000);
+
+    let config = SimulatorConfig {
+        bin: prover::risc_v_simulator::sim::BinarySource::Path(bin_path.into()),
+        cycles,
+        entry_point: runner::DEFAULT_ENTRY_POINT,
+        diagnostics: None,
+    };
+
+    let elf_data = fs::read(elf_path).expect("Failed to read ELF file");
+
+    match runner::run_with_riscof_signature_extraction::<_, IMStandardIsaConfig>(
+        config,
+        QuasiUARTSource::default(),
+        &elf_data,
+        signatures,
+    ) {
+        Ok(()) => {
+            println!("Signature file written to: {}", signatures.display());
+        }
+        Err(e) => {
+            eprintln!("Error: Signature extraction failed: {}", e);
+            std::process::exit(1);
         }
     }
 }
