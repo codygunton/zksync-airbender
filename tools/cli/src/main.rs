@@ -220,7 +220,6 @@ enum Commands {
         #[arg(long)]
         cycles: Option<usize>,
     },
-
 }
 
 fn fetch_data_from_json_rpc(url: &str) -> Result<Option<String>, reqwest::Error> {

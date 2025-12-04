@@ -191,8 +191,7 @@ where
 fn find_signature_bounds(elf_data: &[u8]) -> Result<(u64, u64), String> {
     use object::{Object, ObjectSymbol};
 
-    let elf = object::File::parse(elf_data)
-        .map_err(|e| format!("Failed to parse ELF: {}", e))?;
+    let elf = object::File::parse(elf_data).map_err(|e| format!("Failed to parse ELF: {}", e))?;
 
     let mut begin = None;
     let mut end = None;
