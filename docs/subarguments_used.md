@@ -36,7 +36,7 @@ Now, one step at a time, we modify the argument: First, we allow dynamic init. N
 This way, pre-padding with addresses equal to `0` allows not to tie the number of addresses to the number of cycles, and the contribution of such initializations in case of padding cancels each other in read/write sets.
 
 Then, we keep in mind that `init + write set` is a permutation of `teardown + read set` and go over pieces of the `(address, value, timestamp)` tuple:
-- Write timestamps are coming from setup, so whenever the prover provides read timestamps, we do not need to range-check them - if the permutation holds, then read timestamps are range-checked automatically.
+- Write timestamps are coming from setup, so whenever the prover provides read timestamps, we do not need to range-check them - if the permutation holds, then read timestamps are range-checked automatically. TODO: check this? Depends how == of polys is implemented...
 - Then addresses - initialization checks that all addresses are range-checked, so whenever we use some variables as "address" - we have a free range check for them. Otherwise, such an address is not in the initial write set or the teardown read set, and with `read timestamp < write timestamp` being always enforced, it would break a permutation.
 - Free range check on read value part is a little more convoluted, that's why it comes last. Assume that all parts explained above hold. That is enough to prove RAM consistency by the original paper in the sense that we can only read RAM from the "past". This way, any prover-provided read value in range is checked by induction:
     - Either it comes from the init - then it's `0`.
