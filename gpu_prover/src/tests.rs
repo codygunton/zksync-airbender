@@ -4315,6 +4315,7 @@ pub fn prove_unrolled_execution_with_replayer<
                 _,
                 _,
             >(
+                DelegationCircuitType::Blake2WithCompression,
                 &delegation_circuits,
                 external_challenges,
                 prec,
@@ -4347,6 +4348,7 @@ pub fn prove_unrolled_execution_with_replayer<
                 _,
                 _,
             >(
+                DelegationCircuitType::BigIntWithControl,
                 &delegation_circuits,
                 external_challenges,
                 prec,
@@ -4379,6 +4381,7 @@ pub fn prove_unrolled_execution_with_replayer<
                 _,
                 _,
             >(
+                DelegationCircuitType::KeccakSpecial5,
                 &delegation_circuits,
                 external_challenges,
                 prec,
@@ -4410,6 +4413,7 @@ fn prove_delegation_circuit_with_replayer_format<
     const INDIRECT_WRITES: usize,
     const VARIABLE_OFFSETS: usize,
 >(
+    circuit_type: DelegationCircuitType,
     witnesses: &[Vec<
         riscv_transpiler::witness::DelegationWitness<
             REG_ACCESSES,
@@ -4449,12 +4453,6 @@ where
         VARIABLE_OFFSETS,
     >: DelegationTracingDataHostSource,
 {
-    let circuit_type = <riscv_transpiler::witness::DelegationWitness<
-        REG_ACCESSES,
-        INDIRECT_READS,
-        INDIRECT_WRITES,
-        VARIABLE_OFFSETS,
-    > as DelegationTracingDataHostSource>::CIRCUIT_TYPE;
     let stream = prover_context.get_exec_stream();
 
     let mut per_tree_set = vec![];
@@ -4710,11 +4708,4 @@ fn print_circuit_sizes() {
         )
         .compiled_circuit,
     );
-}
-
-#[test]
-fn kernel_preload() -> era_cudart::result::CudaResult<()> {
-    crate::witness::witness_delegation::touch_kernels()?;
-    crate::witness::witness_unrolled::touch_kernels()?;
-    Ok(())
 }

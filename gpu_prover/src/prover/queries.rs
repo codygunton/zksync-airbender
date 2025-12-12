@@ -402,6 +402,7 @@ impl QueriesOutput {
         Ok(digests)
     }
 
+    #[allow(dead_code)]
     fn get_digests_host(
         indexes: &HostAllocation<[u32]>,
         tree: Arc<Box<[Digest]>>,
@@ -445,6 +446,7 @@ impl QueriesOutput {
         Ok(result)
     }
 
+    #[allow(dead_code)]
     fn get_leafs_and_digests_host(
         indexes_device: &DeviceSlice<u32>,
         indexes_host: &HostAllocation<[u32]>,
