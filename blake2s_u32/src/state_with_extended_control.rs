@@ -16,7 +16,7 @@ pub const CSR_REGISTER_TO_TRIGGER: u32 = 0x7c7;
 // - round mask
 // - control register: output_flag || is_right flag for compression || compression mode flag
 
-#[cfg(all(target_arch = "riscv32", feature = "blake2_with_compression"))]
+#[cfg(all(any(target_arch = "riscv32", target_arch = "riscv64"), feature = "blake2_with_compression"))]
 #[inline(always)]
 fn csr_trigger_delegation(
     states_ptr: *mut u32,
@@ -36,15 +36,15 @@ fn csr_trigger_delegation(
     }
 }
 
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 const NORMAL_MODE_FIRST_ROUNDS_CONTROL_REGISTER: u32 = 0b000;
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 const NORMAL_MODE_LAST_ROUND_CONTROL_REGISTER: u32 = 0b001;
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 const COMPRESSION_MODE_FIRST_ROUNDS_BASE_CONTROL_REGISTER: u32 = 0b100;
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 const COMPRESSION_MODE_LAST_ROUND_EXTRA_BITS: u32 = 0b001;
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 const COMPRESSION_MODE_IS_RIGHT_EXTRA_BITS: u32 = 0b010;
 
 #[derive(Clone, Copy, Debug)]
@@ -151,7 +151,7 @@ impl Blake2RoundFunctionEvaluator {
     ) {
         self.t += input_size_bytes as u32;
 
-        #[cfg(all(target_arch = "riscv32", feature = "blake2_with_compression"))]
+        #[cfg(all(any(target_arch = "riscv32", target_arch = "riscv64"), feature = "blake2_with_compression"))]
         {
             self.extended_state[12] = self.t ^ IV[4];
             self.extended_state[14] = (0xffffffff * last_round as u32) ^ IV[6];
@@ -193,10 +193,10 @@ impl Blake2RoundFunctionEvaluator {
             }
         }
 
-        #[cfg(all(target_arch = "riscv32", not(feature = "blake2_with_compression")))]
+        #[cfg(all(any(target_arch = "riscv32", target_arch = "riscv64"), not(feature = "blake2_with_compression")))]
         panic!("feature `blake2_with_compression` must be activated on RISC-V architecture to use this module");
 
-        #[cfg(not(target_arch = "riscv32"))]
+        #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
         {
             let mut extended_state = [
                 self.state[0],
@@ -251,7 +251,7 @@ impl Blake2RoundFunctionEvaluator {
     ) {
         self.t += input_size_bytes as u32;
 
-        #[cfg(all(target_arch = "riscv32", feature = "blake2_with_compression"))]
+        #[cfg(all(any(target_arch = "riscv32", target_arch = "riscv64"), feature = "blake2_with_compression"))]
         {
             self.extended_state[12] = self.t ^ IV[4];
             self.extended_state[14] = (0xffffffff * last_round as u32) ^ IV[6];
@@ -293,10 +293,10 @@ impl Blake2RoundFunctionEvaluator {
             }
         }
 
-        #[cfg(all(target_arch = "riscv32", not(feature = "blake2_with_compression")))]
+        #[cfg(all(any(target_arch = "riscv32", target_arch = "riscv64"), not(feature = "blake2_with_compression")))]
         panic!("feature `blake2_with_compression` must be activated on RISC-V architecture to use this module");
 
-        #[cfg(not(target_arch = "riscv32"))]
+        #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
         {
             let mut extended_state = [
                 self.state[0],
@@ -341,7 +341,7 @@ impl Blake2RoundFunctionEvaluator {
     /// This function will use witness scratch of self as path witness input,
     /// and self-state as the hash input and destination
     pub fn compress_node<const REDUCED_ROUNDS: bool>(&mut self, is_right: bool) {
-        #[cfg(all(target_arch = "riscv32", feature = "blake2_with_compression"))]
+        #[cfg(all(any(target_arch = "riscv32", target_arch = "riscv64"), feature = "blake2_with_compression"))]
         {
             let mut mask = COMPRESSION_MODE_FIRST_ROUNDS_BASE_CONTROL_REGISTER
                 | (COMPRESSION_MODE_IS_RIGHT_EXTRA_BITS * (is_right as u32));
@@ -385,10 +385,10 @@ impl Blake2RoundFunctionEvaluator {
             }
         }
 
-        #[cfg(all(target_arch = "riscv32", not(feature = "blake2_with_compression")))]
+        #[cfg(all(any(target_arch = "riscv32", target_arch = "riscv64"), not(feature = "blake2_with_compression")))]
         panic!("feature `blake2_with_compression` must be activated on RISC-V architecture to use this module");
 
-        #[cfg(not(target_arch = "riscv32"))]
+        #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
         {
             let mut extended_state = [
                 CONFIGURED_IV[0],
