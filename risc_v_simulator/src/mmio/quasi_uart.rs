@@ -37,7 +37,8 @@ impl MMIOSource for QuasiUART {
                 let mut buffer = std::mem::replace(&mut self.buffer, vec![]);
                 buffer.truncate(idx + 1);
                 let c_string = CString::from_vec_with_nul(buffer).unwrap();
-                println!("UART: `{}`", c_string.to_string_lossy());
+                // Use print! since guest messages include newlines
+                print!("[GUEST] {}", c_string.to_string_lossy());
                 break;
             }
         }
