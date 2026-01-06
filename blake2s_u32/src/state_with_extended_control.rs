@@ -16,7 +16,54 @@ pub const CSR_REGISTER_TO_TRIGGER: u32 = 0x7c7;
 // - round mask
 // - control register: output_flag || is_right flag for compression || compression mode flag
 
-#[cfg(all(any(target_arch = "riscv32", target_arch = "riscv64"), feature = "blake2_with_compression"))]
+// WORKAROUND: Use fence instructions on RV64 to prevent compiler optimization bugs.
+// The CSR instruction reads/writes memory, so we need to ensure memory is synced before/after.
+// RV32 doesn't have these issues and Airbender's simulator doesn't implement fence.
+#[cfg(all(target_arch = "riscv64", feature = "blake2_with_compression"))]
+#[inline(never)]
+fn csr_trigger_delegation(
+    states_ptr: *mut u32,
+    input_ptr: *const u32,
+    round_mask: u32,
+    control_mask: u32,
+) {
+    use core::hint::black_box;
+    use core::sync::atomic::{compiler_fence, Ordering};
+
+    let states_ptr = black_box(states_ptr);
+    let input_ptr = black_box(input_ptr);
+
+    compiler_fence(Ordering::SeqCst);
+
+    // Force memory to be visible
+    unsafe {
+        let _ = core::ptr::read_volatile(states_ptr as *const u8);
+        let _ = core::ptr::read_volatile(input_ptr as *const u8);
+    }
+
+    unsafe {
+        core::arch::asm!(
+            "fence rw, rw",
+            "csrrw x0, 0x7c7, x0",
+            "fence rw, rw",
+            in("x10") states_ptr.addr(),
+            in("x11") input_ptr.addr(),
+            in("x12") round_mask,
+            in("x13") control_mask,
+            options(nostack, preserves_flags)
+        )
+    }
+
+    // Force memory sync after CSR
+    unsafe {
+        let val = core::ptr::read_volatile(states_ptr as *const u8);
+        core::ptr::write_volatile(states_ptr as *mut u8, val);
+    }
+
+    compiler_fence(Ordering::SeqCst);
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "blake2_with_compression"))]
 #[inline(always)]
 fn csr_trigger_delegation(
     states_ptr: *mut u32,
