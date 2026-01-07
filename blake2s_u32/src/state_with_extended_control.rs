@@ -19,6 +19,84 @@ use common_constants::delegation_types::blake2s_with_control::*;
 // - round mask
 // - control register: output_flag || is_right flag for compression || compression mode flag
 
+// WORKAROUND: Use fence instructions on RV64 to prevent compiler optimization bugs.
+// The CSR instruction reads/writes memory, so we need to ensure memory is synced before/after.
+// RV32 doesn't have these issues and Airbender's simulator doesn't implement fence.
+#[cfg(all(target_arch = "riscv64", feature = "blake2_with_compression"))]
+#[inline(never)]
+fn csr_trigger_delegation(
+    states_ptr: *mut u32,
+    input_ptr: *const u32,
+    round_mask: u32,
+    control_mask: u32,
+) {
+    use core::hint::black_box;
+    use core::sync::atomic::{compiler_fence, Ordering};
+
+    let states_ptr = black_box(states_ptr);
+    let input_ptr = black_box(input_ptr);
+
+    compiler_fence(Ordering::SeqCst);
+
+    // Force memory to be visible
+    unsafe {
+        let _ = core::ptr::read_volatile(states_ptr as *const u8);
+        let _ = core::ptr::read_volatile(input_ptr as *const u8);
+    }
+
+    unsafe {
+        core::arch::asm!(
+            "fence rw, rw",
+            "csrrw x0, 0x7c7, x0",
+            "fence rw, rw",
+            in("x10") states_ptr.addr(),
+            in("x11") input_ptr.addr(),
+            in("x12") round_mask,
+            in("x13") control_mask,
+            options(nostack, preserves_flags)
+        )
+    }
+
+    // Force memory sync after CSR
+    unsafe {
+        let val = core::ptr::read_volatile(states_ptr as *const u8);
+        core::ptr::write_volatile(states_ptr as *mut u8, val);
+    }
+
+    compiler_fence(Ordering::SeqCst);
+}
+
+#[cfg(all(target_arch = "riscv32", feature = "blake2_with_compression"))]
+#[inline(always)]
+fn csr_trigger_delegation(
+    states_ptr: *mut u32,
+    input_ptr: *const u32,
+    round_mask: u32,
+    control_mask: u32,
+) {
+    unsafe {
+        core::arch::asm!(
+            "csrrw x0, 0x7c7, x0",
+            in("x10") states_ptr.addr(),
+            in("x11") input_ptr.addr(),
+            in("x12") round_mask,
+            in("x13") control_mask,
+            options(nostack, preserves_flags)
+        )
+    }
+}
+
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+const NORMAL_MODE_FIRST_ROUNDS_CONTROL_REGISTER: u32 = 0b000;
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+const NORMAL_MODE_LAST_ROUND_CONTROL_REGISTER: u32 = 0b001;
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+const COMPRESSION_MODE_FIRST_ROUNDS_BASE_CONTROL_REGISTER: u32 = 0b100;
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+const COMPRESSION_MODE_LAST_ROUND_EXTRA_BITS: u32 = 0b001;
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+const COMPRESSION_MODE_IS_RIGHT_EXTRA_BITS: u32 = 0b010;
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C, align(128))]
 pub struct Blake2RoundFunctionEvaluator {
@@ -36,321 +114,323 @@ impl Blake2RoundFunctionEvaluator {
 
     #[unroll::unroll_for_loops]
     #[inline(always)]
-    pub unsafe fn spec_run_single_round_into_destination<const REDUCED_ROUNDS: bool>(
-        &mut self,
-        _block_len: usize,
-        _dst: *mut [u32; BLAKE2S_DIGEST_SIZE_U32_WORDS],
-    ) {
-        unreachable!("unsupported")
-    }
-
-    /// NOTE: caller must explicitly "reset" before using if use mode is not compression
-    #[allow(invalid_value)]
     pub fn new() -> Self {
-        unsafe {
-            // NOTE: it would only be used in RISC-V simulated machine with zero-by-default state,
-            // where all memory is initialized and physical, so "touching" memory slots is not required
-            let mut new: Self = MaybeUninit::uninit().assume_init();
-            new.t = 0;
-
-            // we will copy-over the initial state to avoid complications
-            new.reset();
-
-            new
+        Self {
+            state: BLAKE2S_IV,
+            extended_state: [0u32; BLAKE2S_EXTENDED_STATE_WIDTH_IN_U32_WORDS],
+            input_buffer: AlignedArray64::default(),
+            t: 0,
         }
     }
 
-    #[inline(always)]
-    pub const fn read_state_for_output(&self) -> [u32; BLAKE2S_DIGEST_SIZE_U32_WORDS] {
-        [
-            self.state[0],
-            self.state[1],
-            self.state[2],
-            self.state[3],
-            self.state[4],
-            self.state[5],
-            self.state[6],
-            self.state[7],
-        ]
-    }
-
-    #[inline(always)]
-    pub const fn read_state_for_output_ref(&self) -> &[u32; BLAKE2S_DIGEST_SIZE_U32_WORDS] {
-        &self.state
-    }
-
-    #[inline(always)]
-    pub const fn get_witness_buffer(&mut self) -> &mut [u32; BLAKE2S_BLOCK_SIZE_U32_WORDS] {
-        self.input_buffer.deref_mut_impl()
-    }
-
+    #[unroll::unroll_for_loops]
     #[inline(always)]
     pub fn reset(&mut self) {
-        unsafe {
-            crate::spec_memcopy_u32_nonoverlapping(
-                CONFIGURED_IV.as_ptr().cast::<u32>(),
-                self.state.as_mut_ptr().cast::<u32>(),
-                8,
-            );
+        self.state = BLAKE2S_IV;
+        for i in 0..BLAKE2S_EXTENDED_STATE_WIDTH_IN_U32_WORDS {
+            self.extended_state[i] = 0;
         }
-
         self.t = 0;
     }
 
-    /// caller must fill the buffer (do not forget to zero-pad),
-    /// and then specify the parameters of the input block
+    #[unroll::unroll_for_loops]
+    pub fn absorb_multiple_blocks(&mut self, input: &[u8]) {
+        let block_len = BLAKE2S_BLOCK_SIZE_IN_BYTES;
+        if input.len() % block_len != 0 {
+            panic!()
+        }
+        for chunk in input.chunks_exact(block_len) {
+            self.absorb_block(chunk)
+        }
+    }
+
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    #[unroll::unroll_for_loops]
+    pub fn absorb_block(&mut self, input: &[u8]) {
+        for (dst, src) in self.input_buffer.0.iter_mut().zip(input.array_chunks::<4>()) {
+            *dst = u32::from_le_bytes(*src);
+        }
+
+        self.absorb_prepared_block()
+    }
+
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
     #[inline(always)]
-    pub unsafe fn run_round_function_with_input<const REDUCED_ROUNDS: bool>(
-        &mut self,
-        input_buffer: &AlignedArray64<u32, BLAKE2S_BLOCK_SIZE_U32_WORDS>,
-        input_size_words: usize,
-        last_round: bool,
-    ) {
-        self.run_round_function_with_input_and_byte_len::<REDUCED_ROUNDS>(
-            input_buffer,
-            input_size_words * core::mem::size_of::<u32>(),
-            last_round,
+    pub fn absorb_block(&mut self, _input: &[u8]) {
+        unimplemented!()
+    }
+
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    #[unroll::unroll_for_loops]
+    #[inline(always)]
+    pub fn absorb_prepared_block(&mut self) {
+        self.t += BLAKE2S_BLOCK_SIZE_IN_BYTES as u32;
+
+        // init extended state
+        self.extended_state[0..8].copy_from_slice(&BLAKE2S_IV);
+        self.extended_state[12] = self.t;
+        self.extended_state[14] = 0;
+
+        let state_ptr: *mut u32 = self.state.as_mut_ptr();
+        let input_ptr: *const u32 = self.input_buffer.0.as_ptr();
+
+        // all rounds except the last
+        for round in 0..9 {
+            let round_mask = ROUND_FUNCTION_MASK[round];
+            csr_trigger_delegation(
+                state_ptr,
+                input_ptr,
+                round_mask,
+                NORMAL_MODE_FIRST_ROUNDS_CONTROL_REGISTER,
+            );
+        }
+
+        // then handle final round
+        let round_mask = ROUND_FUNCTION_MASK[9];
+        csr_trigger_delegation(
+            state_ptr,
+            input_ptr,
+            round_mask,
+            NORMAL_MODE_LAST_ROUND_CONTROL_REGISTER,
         );
     }
 
-    #[inline]
-    #[unroll::unroll_for_loops]
-    pub unsafe fn run_round_function_with_input_and_byte_len<const REDUCED_ROUNDS: bool>(
-        &mut self,
-        input_buffer: &AlignedArray64<u32, BLAKE2S_BLOCK_SIZE_U32_WORDS>,
-        input_size_bytes: usize,
-        last_round: bool,
-    ) {
-        self.t += input_size_bytes as u32;
-
-        #[cfg(all(target_arch = "riscv32", feature = "blake2_with_compression"))]
-        {
-            self.extended_state[12] = self.t ^ IV[4];
-            self.extended_state[14] = (0xffffffff * last_round as u32) ^ IV[6];
-
-            if REDUCED_ROUNDS {
-                let control_register = BLAKE2S_NORMAL_MODE_REDUCED_ROUNDS_INITIAL_CONTROL_REGISTER;
-                unsafe {
-                    blake_csr_trigger_delegation_reduced_rounds(
-                        self.state.as_mut_ptr(),
-                        input_buffer.as_ptr(),
-                        control_register,
-                    );
-                }
-            } else {
-                let control_register = BLAKE2S_NORMAL_MODE_FULL_ROUNDS_INITIAL_CONTROL_REGISTER;
-                unsafe {
-                    blake_csr_trigger_delegation_full_rounds(
-                        self.state.as_mut_ptr(),
-                        input_buffer.as_ptr(),
-                        control_register,
-                    );
-                }
-            }
-        }
-
-        #[cfg(all(target_arch = "riscv32", not(feature = "blake2_with_compression")))]
-        panic!("feature `blake2_with_compression` must be activated on RISC-V architecture to use this module");
-
-        #[cfg(not(target_arch = "riscv32"))]
-        {
-            let mut extended_state = [
-                self.state[0],
-                self.state[1],
-                self.state[2],
-                self.state[3],
-                self.state[4],
-                self.state[5],
-                self.state[6],
-                self.state[7],
-                IV[0],
-                IV[1],
-                IV[2],
-                IV[3],
-                self.t ^ IV[4],
-                IV[5],
-                (0xffffffff * last_round as u32) ^ IV[6],
-                IV[7],
-            ];
-
-            if REDUCED_ROUNDS {
-                round_function_reduced_rounds(&mut extended_state, input_buffer);
-            } else {
-                round_function_full_rounds(&mut extended_state, input_buffer);
-            }
-
-            for i in 0..8 {
-                self.state[i] ^= extended_state[i];
-                self.state[i] ^= extended_state[i + 8];
-            }
-        }
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+    #[inline(always)]
+    pub fn absorb_prepared_block(&mut self) {
+        unimplemented!()
     }
 
-    #[inline(always)]
-    pub unsafe fn run_round_function<const REDUCED_ROUNDS: bool>(
-        &mut self,
-        input_size_words: usize,
-        last_round: bool,
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    #[unroll::unroll_for_loops]
+    pub fn finalize_without_digest_length(
+        mut self,
+        remaining_input: &[u8],
+        dst: &mut MaybeUninit<[u8; 32]>,
     ) {
-        self.run_round_function_with_byte_len::<REDUCED_ROUNDS>(
-            input_size_words * core::mem::size_of::<u32>(),
-            last_round,
+        debug_assert!(remaining_input.len() < BLAKE2S_BLOCK_SIZE_IN_BYTES);
+
+        self.t += remaining_input.len() as u32;
+        // init padding with zeroes
+        for el in self.input_buffer.0.iter_mut() {
+            *el = 0u32;
+        }
+
+        // note the endianess of course
+        for (idx, src) in remaining_input.iter().enumerate() {
+            let word = idx / 4;
+            let byte_offset = (idx % 4) * 8;
+            self.input_buffer.0[word] |= (*src as u32) << byte_offset;
+        }
+
+        // init extended state
+        self.extended_state[0..8].copy_from_slice(&BLAKE2S_IV);
+        self.extended_state[12] = self.t;
+        self.extended_state[14] = 0xffff_ffff;
+
+        let state_ptr: *mut u32 = self.state.as_mut_ptr();
+        let input_ptr: *const u32 = self.input_buffer.0.as_ptr();
+
+        // all rounds except the last
+        for round in 0..9 {
+            let round_mask = ROUND_FUNCTION_MASK[round];
+            csr_trigger_delegation(
+                state_ptr,
+                input_ptr,
+                round_mask,
+                NORMAL_MODE_FIRST_ROUNDS_CONTROL_REGISTER,
+            );
+        }
+
+        // then handle final round
+        let round_mask = ROUND_FUNCTION_MASK[9];
+        csr_trigger_delegation(
+            state_ptr,
+            input_ptr,
+            round_mask,
+            NORMAL_MODE_LAST_ROUND_CONTROL_REGISTER,
         );
+
+        // write into dst
+        let dst = dst.as_mut_ptr().cast::<[u32; 8]>();
+        unsafe { dst.write(self.state) };
     }
 
-    #[inline]
-    #[unroll::unroll_for_loops]
-    pub unsafe fn run_round_function_with_byte_len<const REDUCED_ROUNDS: bool>(
-        &mut self,
-        input_size_bytes: usize,
-        last_round: bool,
-    ) {
-        self.t += input_size_bytes as u32;
-
-        #[cfg(all(target_arch = "riscv32", feature = "blake2_with_compression"))]
-        {
-            self.extended_state[12] = self.t ^ IV[4];
-            self.extended_state[14] = (0xffffffff * last_round as u32) ^ IV[6];
-
-            if REDUCED_ROUNDS {
-                let control_register = BLAKE2S_NORMAL_MODE_REDUCED_ROUNDS_INITIAL_CONTROL_REGISTER;
-                unsafe {
-                    blake_csr_trigger_delegation_reduced_rounds(
-                        self.state.as_mut_ptr(),
-                        self.input_buffer.as_ptr(),
-                        control_register,
-                    );
-                }
-            } else {
-                let control_register = BLAKE2S_NORMAL_MODE_FULL_ROUNDS_INITIAL_CONTROL_REGISTER;
-                unsafe {
-                    blake_csr_trigger_delegation_full_rounds(
-                        self.state.as_mut_ptr(),
-                        self.input_buffer.as_ptr(),
-                        control_register,
-                    );
-                }
-            }
-        }
-
-        #[cfg(all(target_arch = "riscv32", not(feature = "blake2_with_compression")))]
-        panic!("feature `blake2_with_compression` must be activated on RISC-V architecture to use this module");
-
-        #[cfg(not(target_arch = "riscv32"))]
-        {
-            let mut extended_state = [
-                self.state[0],
-                self.state[1],
-                self.state[2],
-                self.state[3],
-                self.state[4],
-                self.state[5],
-                self.state[6],
-                self.state[7],
-                IV[0],
-                IV[1],
-                IV[2],
-                IV[3],
-                self.t ^ IV[4],
-                IV[5],
-                (0xffffffff * last_round as u32) ^ IV[6],
-                IV[7],
-            ];
-
-            if REDUCED_ROUNDS {
-                round_function_reduced_rounds(&mut extended_state, &self.input_buffer);
-            } else {
-                round_function_full_rounds(&mut extended_state, &self.input_buffer);
-            }
-
-            for i in 0..8 {
-                self.state[i] ^= extended_state[i];
-                self.state[i] ^= extended_state[i + 8];
-            }
-        }
-    }
-
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
     #[inline(always)]
-    pub fn compress_two_to_one<const REDUCED_ROUNDS: bool>(
-        _message_block: &[u32; BLAKE2S_BLOCK_SIZE_U32_WORDS],
-        _dst: &mut [u32; BLAKE2S_DIGEST_SIZE_U32_WORDS],
+    pub fn finalize_without_digest_length(
+        self,
+        _remaining_input: &[u8],
+        _dst: &mut MaybeUninit<[u8; 32]>,
     ) {
-        panic!("Must not be used in conjunction with prover, please check the features across your build chain");
+        unimplemented!()
     }
 
-    /// This function will use witness scratch of self as path witness input,
-    /// and self-state as the hash input and destination
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
     #[unroll::unroll_for_loops]
-    pub fn compress_node<const REDUCED_ROUNDS: bool>(&mut self, is_right: bool) {
-        #[cfg(all(target_arch = "riscv32", feature = "blake2_with_compression"))]
-        {
-            if REDUCED_ROUNDS {
-                let control_register = BLAKE2S_NORMAL_MODE_REDUCED_ROUNDS_INITIAL_CONTROL_REGISTER
-                    | BLAKE2S_COMPRESSION_MODE_EXTRA_BITS
-                    | (BLAKE2S_COMPRESSION_MODE_IS_RIGHT_EXTRA_BITS * (is_right as u32));
-                unsafe {
-                    blake_csr_trigger_delegation_reduced_rounds(
-                        self.state.as_mut_ptr(),
-                        self.input_buffer.as_ptr(),
-                        control_register,
-                    );
-                }
-            } else {
-                let control_register = BLAKE2S_NORMAL_MODE_FULL_ROUNDS_INITIAL_CONTROL_REGISTER
-                    | BLAKE2S_COMPRESSION_MODE_EXTRA_BITS
-                    | (BLAKE2S_COMPRESSION_MODE_IS_RIGHT_EXTRA_BITS * (is_right as u32));
-                unsafe {
-                    blake_csr_trigger_delegation_full_rounds(
-                        self.state.as_mut_ptr(),
-                        self.input_buffer.as_ptr(),
-                        control_register,
-                    );
-                }
-            }
+    pub fn finalize_with_digest_length(
+        mut self,
+        digest_length: usize,
+        remaining_input: &[u8],
+        dst: &mut MaybeUninit<[u8; 32]>,
+    ) {
+        debug_assert!(remaining_input.len() < BLAKE2S_BLOCK_SIZE_IN_BYTES);
+        debug_assert!(digest_length <= 32);
+
+        // apply personalization
+        let param = [digest_length as u32 | (1 << 16) | (1 << 24), 0, 0, 0, 0, 0, 0, 0];
+        for i in 0..8 {
+            self.state[i] ^= param[i];
         }
 
-        #[cfg(all(target_arch = "riscv32", not(feature = "blake2_with_compression")))]
-        panic!("feature `blake2_with_compression` must be activated on RISC-V architecture to use this module");
-
-        #[cfg(not(target_arch = "riscv32"))]
-        {
-            let mut extended_state = [
-                CONFIGURED_IV[0],
-                CONFIGURED_IV[1],
-                CONFIGURED_IV[2],
-                CONFIGURED_IV[3],
-                CONFIGURED_IV[4],
-                CONFIGURED_IV[5],
-                CONFIGURED_IV[6],
-                CONFIGURED_IV[7],
-                IV[0],
-                IV[1],
-                IV[2],
-                IV[3],
-                (BLAKE2S_BLOCK_SIZE_BYTES as u32) ^ IV[4],
-                IV[5],
-                0xffffffff ^ IV[6],
-                IV[7],
-            ];
-
-            let mut input = [0u32; BLAKE2S_BLOCK_SIZE_U32_WORDS];
-            if is_right {
-                input[..8].copy_from_slice(&self.input_buffer[..8]);
-                input[8..16].copy_from_slice(&self.state);
-            } else {
-                input[..8].copy_from_slice(&self.state);
-                input[8..16].copy_from_slice(&self.input_buffer[..8]);
-            }
-
-            if REDUCED_ROUNDS {
-                round_function_reduced_rounds(&mut extended_state, &input);
-            } else {
-                round_function_full_rounds(&mut extended_state, &input);
-            }
-
-            for i in 0..8 {
-                self.state[i] = CONFIGURED_IV[i] ^ extended_state[i] ^ extended_state[i + 8];
-            }
+        self.t += remaining_input.len() as u32;
+        // init padding with zeroes
+        for el in self.input_buffer.0.iter_mut() {
+            *el = 0u32;
         }
+
+        // note the endianess of course
+        for (idx, src) in remaining_input.iter().enumerate() {
+            let word = idx / 4;
+            let byte_offset = (idx % 4) * 8;
+            self.input_buffer.0[word] |= (*src as u32) << byte_offset;
+        }
+
+        // init extended state
+        self.extended_state[0..8].copy_from_slice(&BLAKE2S_IV);
+        self.extended_state[12] = self.t;
+        self.extended_state[14] = 0xffff_ffff;
+
+        let state_ptr: *mut u32 = self.state.as_mut_ptr();
+        let input_ptr: *const u32 = self.input_buffer.0.as_ptr();
+
+        // all rounds except the last
+        for round in 0..9 {
+            let round_mask = ROUND_FUNCTION_MASK[round];
+            csr_trigger_delegation(
+                state_ptr,
+                input_ptr,
+                round_mask,
+                NORMAL_MODE_FIRST_ROUNDS_CONTROL_REGISTER,
+            );
+        }
+
+        // then handle final round
+        let round_mask = ROUND_FUNCTION_MASK[9];
+        csr_trigger_delegation(
+            state_ptr,
+            input_ptr,
+            round_mask,
+            NORMAL_MODE_LAST_ROUND_CONTROL_REGISTER,
+        );
+
+        // write into dst
+        let dst = dst.as_mut_ptr().cast::<[u32; 8]>();
+        unsafe { dst.write(self.state) };
+    }
+
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+    #[inline(always)]
+    pub fn finalize_with_digest_length(
+        self,
+        _digest_length: usize,
+        _remaining_input: &[u8],
+        _dst: &mut MaybeUninit<[u8; 32]>,
+    ) {
+        unimplemented!()
+    }
+
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    #[inline(always)]
+    pub fn two_to_one_compression_fixed_length(
+        mut self,
+        left: &[u8; 32],
+        right: &[u8; 32],
+        dst: &mut MaybeUninit<[u8; 32]>,
+    ) {
+        // we need to follow the usual HAIFA structure
+        // - h0 = IV XOR params
+        // - h1 = F(h0, 0..0 || left, 32)
+        // - h2 = F(h1, 0..0 || right, 64 | FINAL_FLAG)
+
+        // param is digest_len (32 bytes) || key_len (0) || fanout (1) || depth (1)
+        let param = [32 | (1 << 16) | (1 << 24), 0, 0, 0, 0, 0, 0, 0];
+        for i in 0..8 {
+            self.state[i] ^= param[i];
+        }
+
+        // in compression mode we place data into input in specific order and locations
+        // so first we compress left, then right
+        // input buffer is separate from state + extended state, and we write left and right
+        // consecutively in it
+
+        // first we do left
+        for (dst, src) in self.input_buffer.0[..8].iter_mut().zip(left.array_chunks::<4>()) {
+            *dst = u32::from_le_bytes(*src);
+        }
+
+        let t: u32 = 32; // we absorbed 32 bytes
+                         // init extended state
+        self.extended_state[0..8].copy_from_slice(&BLAKE2S_IV);
+        self.extended_state[12] = t;
+        self.extended_state[14] = 0;
+
+        let state_ptr: *mut u32 = self.state.as_mut_ptr();
+        let input_ptr: *const u32 = self.input_buffer.0.as_ptr();
+
+        // all rounds except the last
+        for round in 0..9 {
+            let round_mask = ROUND_FUNCTION_MASK[round];
+            let control_mask = COMPRESSION_MODE_FIRST_ROUNDS_BASE_CONTROL_REGISTER;
+            csr_trigger_delegation(state_ptr, input_ptr, round_mask, control_mask);
+        }
+
+        // then handle final round
+        let round_mask = ROUND_FUNCTION_MASK[9];
+        let control_mask =
+            COMPRESSION_MODE_FIRST_ROUNDS_BASE_CONTROL_REGISTER | COMPRESSION_MODE_LAST_ROUND_EXTRA_BITS;
+        csr_trigger_delegation(state_ptr, input_ptr, round_mask, control_mask);
+
+        // now we do right
+
+        for (dst, src) in self.input_buffer.0[8..16].iter_mut().zip(right.array_chunks::<4>()) {
+            *dst = u32::from_le_bytes(*src);
+        }
+
+        let t: u32 = 64; // we absorbed 64 bytes
+                         // init extended state
+        self.extended_state[0..8].copy_from_slice(&BLAKE2S_IV);
+        self.extended_state[12] = t;
+        self.extended_state[14] = 0xffff_ffff; // mark as final
+
+        // all rounds except the last
+        for round in 0..9 {
+            let round_mask = ROUND_FUNCTION_MASK[round];
+            let control_mask =
+                COMPRESSION_MODE_FIRST_ROUNDS_BASE_CONTROL_REGISTER | COMPRESSION_MODE_IS_RIGHT_EXTRA_BITS;
+            csr_trigger_delegation(state_ptr, input_ptr, round_mask, control_mask);
+        }
+
+        // then handle final round
+        let round_mask = ROUND_FUNCTION_MASK[9];
+        let control_mask = COMPRESSION_MODE_FIRST_ROUNDS_BASE_CONTROL_REGISTER
+            | COMPRESSION_MODE_IS_RIGHT_EXTRA_BITS
+            | COMPRESSION_MODE_LAST_ROUND_EXTRA_BITS;
+        csr_trigger_delegation(state_ptr, input_ptr, round_mask, control_mask);
+
+        // write into dst
+        let dst = dst.as_mut_ptr().cast::<[u32; 8]>();
+        unsafe { dst.write(self.state) };
+    }
+
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+    #[inline(always)]
+    pub fn two_to_one_compression_fixed_length(
+        self,
+        _left: &[u8; 32],
+        _right: &[u8; 32],
+        _dst: &mut MaybeUninit<[u8; 32]>,
+    ) {
+        unimplemented!()
     }
 }

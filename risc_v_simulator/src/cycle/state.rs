@@ -1166,6 +1166,11 @@ impl<Config: MachineConfig> RiscV32State<Config> {
                         }
                         let rs1_as_imm = ITypeOpcode::rs1(instr);
 
+                        // Set the current PC in the non-determinism source for oracle query tracking
+                        if csr_number == NON_DETERMINISM_CSR {
+                            non_determinism_source.set_current_pc(pc as u64);
+                        }
+
                         if Config::SUPPORT_STANDARD_CSRS == false {
                             // read
                             match csr_number {

@@ -40,8 +40,9 @@ pub fn csr_write_word(word: usize) {
 #[cfg(target_arch = "riscv32")]
 #[inline(always)]
 /// Reads a word from CRS register.
+/// Returns u32 for consistent oracle protocol on both rv32 and rv64.
 pub fn csr_read_word() -> u32 {
-    let mut output;
+    let mut output: u32;
     unsafe {
         core::arch::asm!(
             "csrrw {rd}, 0x7c0, x0",
