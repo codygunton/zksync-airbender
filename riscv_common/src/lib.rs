@@ -1,6 +1,6 @@
 #![no_std]
 
-#[cfg(all(target_arch = "riscv32", feature = "boot_sequence"))]
+#[cfg(all(any(target_arch = "riscv32", target_arch = "riscv64"), feature = "boot_sequence"))]
 pub mod boot_sequence;
 
 /// Exit sequence produced by `zksync_os_finish_success_extended`
@@ -37,6 +37,24 @@ pub fn csr_write_word(word: usize) {
     }
 }
 
+#[cfg(target_arch = "riscv64")]
+#[inline(always)]
+/// Writes a given word into CRS register.
+pub fn csr_write_word(word: usize) {
+    use core::sync::atomic::{compiler_fence, Ordering};
+    compiler_fence(Ordering::SeqCst);
+    unsafe {
+        core::arch::asm!(
+            "fence rw, rw",
+            "csrrw x0, 0x7c0, {rd}",
+            "fence rw, rw",
+            rd = in(reg) word,
+            options(nomem, nostack, preserves_flags)
+        )
+    }
+    compiler_fence(Ordering::SeqCst);
+}
+
 #[cfg(target_arch = "riscv32")]
 #[inline(always)]
 /// Reads a word from CRS register.
@@ -54,7 +72,35 @@ pub fn csr_read_word() -> u32 {
     output
 }
 
+#[cfg(target_arch = "riscv64")]
+#[inline(always)]
+/// Reads a word from CRS register.
+/// Returns u32 for consistent oracle protocol on both rv32 and rv64.
+pub fn csr_read_word() -> u32 {
+    use core::sync::atomic::{compiler_fence, Ordering};
+    let mut output: u64;
+    compiler_fence(Ordering::SeqCst);
+    unsafe {
+        core::arch::asm!(
+            "fence rw, rw",
+            "csrrw {rd}, 0x7c0, x0",
+            "fence rw, rw",
+            rd = out(reg) output,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    compiler_fence(Ordering::SeqCst);
+
+    output as u32
+}
+
 #[cfg(target_arch = "riscv32")]
+#[no_mangle]
+pub fn rust_abort() -> ! {
+    zksync_os_finish_error()
+}
+
+#[cfg(target_arch = "riscv64")]
 #[no_mangle]
 pub fn rust_abort() -> ! {
     zksync_os_finish_error()
@@ -62,6 +108,19 @@ pub fn rust_abort() -> ! {
 
 /// Set data as a output of the current execution. Unsatisfiable in circuits
 #[cfg(target_arch = "riscv32")]
+#[inline(never)]
+pub fn zksync_os_finish_error() -> ! {
+    unsafe {
+        core::arch::asm!(
+            "csrrw x0, cycle, x0",
+            options(nomem, nostack, preserves_flags)
+        );
+        core::hint::unreachable_unchecked();
+    }
+}
+
+/// Set data as a output of the current execution. Unsatisfiable in circuits
+#[cfg(target_arch = "riscv64")]
 #[inline(never)]
 pub fn zksync_os_finish_error() -> ! {
     unsafe {
@@ -91,6 +150,70 @@ pub fn zksync_os_finish_success(data: &[u32; 8]) -> ! {
 /// By convention, the data that is stored in registers 10-25 after
 /// execution has finished is considered 'output' of the computation.
 #[cfg(target_arch = "riscv32")]
+#[inline(never)]
+pub fn zksync_os_finish_success_extended(data: &[u32; 16]) -> ! {
+    let data_ptr = core::hint::black_box(data.as_ptr().cast::<u32>());
+    unsafe {
+        core::arch::asm!(
+            "lw x10, 0(x26)",
+            "lw x11, 4(x26)",
+            "lw x12, 8(x26)",
+            "lw x13, 12(x26)",
+            "lw x14, 16(x26)",
+            "lw x15, 20(x26)",
+            "lw x16, 24(x26)",
+            "lw x17, 28(x26)",
+            "lw x18, 32(x26)",
+            "lw x19, 36(x26)",
+            "lw x20, 40(x26)",
+            "lw x21, 44(x26)",
+            "lw x22, 48(x26)",
+            "lw x23, 52(x26)",
+            "lw x24, 56(x26)",
+            "lw x25, 60(x26)",
+            in("x26") data_ptr,
+            out("x10") _,
+            out("x11") _,
+            out("x12") _,
+            out("x13") _,
+            out("x14") _,
+            out("x15") _,
+            out("x16") _,
+            out("x17") _,
+            out("x18") _,
+            out("x19") _,
+            out("x20") _,
+            out("x21") _,
+            out("x22") _,
+            out("x23") _,
+            out("x24") _,
+            out("x25") _,
+            options(nostack, preserves_flags)
+        )
+    }
+    loop {
+        continue;
+    }
+}
+
+/// Set data as a output of the current execution.
+/// Allows program to pass up to 8 integers as output values.
+///
+/// By convention, the data that is stored in registers 10-17 after
+/// execution has finished is considered 'output' of the computation.
+/// Registers 18-25 will be set to 0 as our convention for recursive chain start
+#[cfg(target_arch = "riscv64")]
+#[inline(never)]
+pub fn zksync_os_finish_success(data: &[u32; 8]) -> ! {
+    let mut result = [0u32; 16];
+    result[..8].copy_from_slice(data);
+    zksync_os_finish_success_extended(&result)
+}
+
+/// Set data as a output of the current execution.
+/// By convention, the data that is stored in registers 10-25 after
+/// execution has finished is considered 'output' of the computation.
+#[cfg(target_arch = "riscv64")]
 #[inline(never)]
 pub fn zksync_os_finish_success_extended(data: &[u32; 16]) -> ! {
     let data_ptr = core::hint::black_box(data.as_ptr().cast::<u32>());

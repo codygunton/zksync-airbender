@@ -1,9 +1,13 @@
+#[cfg(target_arch = "riscv32")]
 core::arch::global_asm!(include_str!("asm/start.s"));
 
-#[cfg(not(feature = "no_memcpy_override"))]
+#[cfg(target_arch = "riscv64")]
+core::arch::global_asm!(include_str!("asm/start64.s"));
+
+#[cfg(all(not(feature = "no_memcpy_override"), target_arch = "riscv32"))]
 core::arch::global_asm!(include_str!("asm/memcpy.s"));
 
-#[cfg(not(feature = "no_memset_override"))]
+#[cfg(all(not(feature = "no_memset_override"), target_arch = "riscv32"))]
 core::arch::global_asm!(include_str!("asm/memset.s"));
 
 pub use ::common_constants;
@@ -44,9 +48,13 @@ pub fn heap_end() -> *mut usize {
 pub fn init() {
     use core::ptr::addr_of_mut;
 
-    use common_constants::rom::ROM_BYTE_SIZE;
-    assert!(addr_of_mut!(_rom_size).addr() <= ROM_BYTE_SIZE);
-    assert_eq!(addr_of_mut!(_estack).addr(), ROM_BYTE_SIZE);
+    // These assertions only apply to RV32 memory layout
+    #[cfg(target_arch = "riscv32")]
+    {
+        use common_constants::rom::ROM_BYTE_SIZE;
+        assert!(addr_of_mut!(_rom_size).addr() <= ROM_BYTE_SIZE);
+        assert_eq!(addr_of_mut!(_estack).addr(), ROM_BYTE_SIZE);
+    }
 
     unsafe {
         // copy .rodata
@@ -72,12 +80,19 @@ pub fn init() {
 }
 
 unsafe fn load_to_ram(src: *const u8, dst_start: *mut u8, dst_end: *mut u8) {
-    #[cfg(debug_assertions)]
+    // These debug assertions only apply to RV32 memory layout
+    #[cfg(all(debug_assertions, target_arch = "riscv32"))]
     {
         use common_constants::rom::ROM_BYTE_SIZE;
 
         debug_assert!(src.addr() < ROM_BYTE_SIZE);
         debug_assert!(dst_start.addr() >= ROM_BYTE_SIZE);
+        debug_assert!(dst_end.addr() >= dst_start.addr());
+    }
+
+    // For RV64, just check basic sanity
+    #[cfg(all(debug_assertions, target_arch = "riscv64"))]
+    {
         debug_assert!(dst_end.addr() >= dst_start.addr());
     }
 
