@@ -120,11 +120,13 @@ impl<'a, const N: usize, A: Allocator> ContextImpl for PreallocatedSnapshots<'a,
 
             // we do VERY stupid prefetch here
             unsafe {
-                std::intrinsics::prefetch_write_data::<u32, 2>(
+                std::intrinsics::prefetch_write_data::<u32>(
                     addr_of!((*(next.as_ptr() as *const TraceChunk)).values).cast(),
+                    2,
                 );
-                std::intrinsics::prefetch_write_data::<TimestampScalar, 2>(
+                std::intrinsics::prefetch_write_data::<TimestampScalar>(
                     addr_of!((*(next.as_ptr() as *const TraceChunk)).timestamps).cast(),
+                    2,
                 );
             }
 

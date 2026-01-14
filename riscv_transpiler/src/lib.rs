@@ -11,6 +11,7 @@
 #![feature(const_cmp)]
 #![feature(const_trait_impl)]
 #![feature(core_intrinsics)]
+#![feature(new_zeroed_alloc)]
 
 // In the first take over the compiler and the corresponding simulator we will first
 // preprocess the bytecode into fixed-width format, and then will do very simple and execution loop
