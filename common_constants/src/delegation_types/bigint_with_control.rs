@@ -34,6 +34,33 @@ pub unsafe fn bigint_csr_trigger_delegation(
     mask
 }
 
+#[cfg(target_arch = "riscv64")]
+#[inline(always)]
+pub unsafe fn bigint_csr_trigger_delegation(
+    mut_ptr: *mut u32,
+    immut_ptr: *const u32,
+    mask: u32,
+) -> u32 {
+    use core::sync::atomic::{compiler_fence, Ordering};
+
+    let mut mask = mask;
+    compiler_fence(Ordering::SeqCst);
+    unsafe {
+        core::arch::asm!(
+            "fence rw, rw",
+            "csrrw x0, 0x7CA, x0",
+            "fence rw, rw",
+            in("x10") mut_ptr.addr(),
+            in("x11") immut_ptr.addr(),
+            inlateout("x12") mask,
+            options(nostack, preserves_flags)
+        );
+    }
+    compiler_fence(Ordering::SeqCst);
+
+    mask
+}
+
 pub const NUM_BIGINT_REGISTER_ACCESSES: usize = 3;
 pub const NUM_BIGINT_VARIABLE_OFFSETS: usize = 0;
 
