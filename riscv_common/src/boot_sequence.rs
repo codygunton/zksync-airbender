@@ -10,6 +10,12 @@ core::arch::global_asm!(include_str!("asm/memcpy.s"));
 #[cfg(all(not(feature = "no_memset_override"), target_arch = "riscv32"))]
 core::arch::global_asm!(include_str!("asm/memset.s"));
 
+#[cfg(all(not(feature = "no_memcpy_override"), target_arch = "riscv64"))]
+core::arch::global_asm!(include_str!("asm/memcpy64.s"));
+
+#[cfg(all(not(feature = "no_memset_override"), target_arch = "riscv64"))]
+core::arch::global_asm!(include_str!("asm/memset64.s"));
+
 pub use ::common_constants;
 
 extern "C" {
