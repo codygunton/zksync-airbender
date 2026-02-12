@@ -777,7 +777,16 @@ pub fn generate_inlined_configured<MW: MersenneWrapper>(
     let quotient_add_assign_last_row_and_zero_contribution =
         MW::add_assign(quote! {quotient}, quote! {last_row_and_zero_contribution});
 
+    // This module provides wrappers for field operations that
+    // are either inlined or not depending on the platform.
+    // This is done to retain the performance on RISC-V, while keeping compile speed
+    // for the host platform sane.
+    let field_ops_shim = quote! {
+        use ::verifier_common::field_ops;
+    };
+
     quote! {
+        #field_ops_shim
 
         #[allow(unused_braces, unused_mut, unused_variables)]
         unsafe fn evaluate_every_row_except_last #generic_function_parameters (

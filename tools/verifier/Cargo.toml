@@ -24,7 +24,6 @@ cargo-bloat = "0.12.1"
 opt-level = 3
 lto = true
 codegen-units = 1
-# panic = "abort"
 panic = "immediate-abort"
 debug = false
 strip = true
