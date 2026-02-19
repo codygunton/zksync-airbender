@@ -153,6 +153,17 @@ enum Commands {
         machine: Machine,
     },
 
+    /// Run a self-checking ACT4 ELF and exit with its pass/fail code.
+    /// The ELF path is a positional argument for compatibility with run_tests.py
+    /// (which appends ELF paths directly to the command string).
+    RunForAct {
+        /// Path to self-checking ELF produced by the ACT4 framework
+        elf: String,
+        /// Maximum number of RISC-V cycles before timeout (exit code 2)
+        #[arg(long, default_value = "10000000")]
+        cycles: usize,
+    },
+
     /// Run a binary for RISCOF compliance testing (extracts begin_signature/end_signature).
     RunForRiscof {
         /// Binary file to execute
@@ -402,6 +413,11 @@ fn main() {
             let input_data = fetch_input_data(input).expect("Failed to fetch");
 
             run_binary(bin, cycles, input_data, expected_results, machine);
+        }
+        Commands::RunForAct { elf, cycles } => {
+            let elf_data = fs::read(elf).expect("Failed to read ELF file");
+            let exit_code = riscv_transpiler::act::run_elf_for_act(&elf_data, *cycles);
+            std::process::exit(exit_code);
         }
         Commands::RunForRiscof {
             bin,

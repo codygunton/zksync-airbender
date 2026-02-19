@@ -16,6 +16,7 @@
 // preprocess the bytecode into fixed-width format, and then will do very simple and execution loop
 // that just dispatches a function pointer
 
+pub mod act;
 pub mod ir;
 pub mod jit;
 pub mod replayer;
