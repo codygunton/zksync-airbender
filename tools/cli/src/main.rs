@@ -153,6 +153,28 @@ enum Commands {
         machine: Machine,
     },
 
+    /// Run a flat binary through the transpiler VM.
+    /// The binary is placed at --entry-point in the address space.
+    /// If --tohost-addr is given, polls that address every 100k cycles and exits
+    /// 0 (tohost==1), 1 (tohost nonzero != 1), or 2 (cycle limit exhausted).
+    /// If --tohost-addr is omitted, runs for --cycles cycles and prints registers.
+    RunWithTranspiler {
+        /// Path to flat binary (e.g. produced by riscv64-unknown-elf-objcopy -O binary)
+        #[arg(short, long)]
+        bin: String,
+        /// Address where the binary is loaded and where execution begins
+        #[arg(long, default_value_t = 0)]
+        entry_point: u32,
+        /// Maximum RISC-V cycles to execute. Defaults to 32_000_000.
+        #[arg(long)]
+        cycles: Option<usize>,
+        /// If set, poll this word address for HTIF tohost signal.
+        /// Nonzero tohost triggers exit: 1→exit(0), other nonzero→exit(1).
+        /// Cycle exhaustion without tohost signal→exit(2).
+        #[arg(long)]
+        tohost_addr: Option<u32>,
+    },
+
     /// Generates verification key hash, for a given binary.
     /// This way you can compare it with the one inside the proof, to make sure that
     /// the proof is really checking the execution of a given code.
@@ -386,6 +408,30 @@ fn main() {
             let input_data = fetch_input_data(input).expect("Failed to fetch");
 
             run_binary(bin, cycles, input_data, expected_results, machine);
+        }
+        Commands::RunWithTranspiler { bin, entry_point, cycles, tohost_addr } => {
+            let binary = fs::read(bin).expect("Failed to read binary file");
+            let result = riscv_transpiler::run::run_binary(
+                &binary,
+                *entry_point,
+                cycles.unwrap_or(DEFAULT_CYCLES),
+                *tohost_addr,
+            );
+            if tohost_addr.is_some() {
+                if result.timed_out {
+                    eprintln!("run-with-transpiler: cycle limit exhausted without tohost signal");
+                    std::process::exit(2);
+                }
+                match result.tohost_value {
+                    Some(1) => std::process::exit(0),
+                    Some(_) => std::process::exit(1),
+                    None => std::process::exit(2),
+                }
+            } else {
+                let regs = &result.registers[10..18];
+                let s = regs.iter().map(|x| format!("{}", x)).collect::<Vec<_>>().join(", ");
+                println!("Result: {}", s);
+            }
         }
         Commands::GenerateVk {
             bin,

@@ -19,6 +19,7 @@
 pub mod ir;
 pub mod jit;
 pub mod replayer;
+pub mod run;
 pub mod vm;
 pub mod witness;
 

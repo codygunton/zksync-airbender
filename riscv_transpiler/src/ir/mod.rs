@@ -107,11 +107,7 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
                 match funct3 {
                     0 | 1 | 4 | 5 | 6 | 7 => {}
                     _ => {
-                        panic!(
-                            "Unknown BRANCH-like opcode 0x{:08x} at PC = 0x{:08x}",
-                            opcode,
-                            i * 4
-                        );
+                        // Unknown BRANCH funct3 — treat as illegal (may be inline data)
                     }
                 };
 
@@ -138,15 +134,8 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
                         Instruction::from_imm(InstructionName::Srai, formal_rs1, 0, rd, imm & 0x1f)
                     }
                     0b101 if funct7 == ROT_FUNCT7 => {
-                        panic!("not supporting rotate family")
-                        // Arithmetic shift right
-                        // shift is encoded in lowest 5 bits
-
-                        // if Config::SUPPORT_ROT {
-                        //     operand_1.rotate_right(operand_2 & 0x1f)
-                        // } else {
-                        //     panic!("Unknown opcode 0x{:08x}", opcode);
-                        // }
+                        // Rotate family not supported — treat as illegal
+                        illegal_instr
                     }
                     GROUP_IMM_SLT => {
                         Instruction::from_imm(InstructionName::Slti, formal_rs1, 0, rd, imm)
@@ -163,9 +152,7 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
                     GROUP_IMM_AND => {
                         Instruction::from_imm(InstructionName::Andi, formal_rs1, 0, rd, imm)
                     }
-                    _ => {
-                        panic!("Unknown opcode 0x{:08x}", opcode);
-                    }
+                    _ => illegal_instr,
                 };
 
                 instr
@@ -306,8 +293,8 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
                             0,
                         ),
                         0b001 if funct7 == ROT_FUNCT7 => {
-                            panic!("ROL is not supported");
-                            // Instruction::from_imm(InstructionName::Rol, formal_rs1, formal_rs2, rd, 0)
+                            // ROL not supported — treat as illegal
+                            illegal_instr
                         }
                         0b101 if funct7 == SRL_FUNCT7 => Instruction::from_imm(
                             InstructionName::Srl,
@@ -324,8 +311,8 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
                             0,
                         ),
                         0b101 if funct7 == ROT_FUNCT7 => {
-                            panic!("ROR is not supported");
-                            // Instruction::from_imm(InstructionName::Ror, formal_rs1, formal_rs2, rd, 0)
+                            // ROR not supported — treat as illegal
+                            illegal_instr
                         }
                         0b010 => Instruction::from_imm(
                             InstructionName::Slt,
@@ -362,9 +349,7 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
                             rd,
                             0,
                         ),
-                        _ => {
-                            panic!("Unknown opcode 0x{:08x}", opcode);
-                        }
+                        _ => illegal_instr,
                     }
                 }
             }
@@ -433,9 +418,7 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
 
                         instr
                     }
-                    _ => {
-                        panic!("Unknown opcode 0x{:08x}", opcode);
-                    }
+                    _ => illegal_instr,
                 }
             }
             OPCODE_STORE => {
@@ -487,9 +470,7 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
                             _ => unsafe { core::hint::unreachable_unchecked() },
                         }
                     }
-                    _ => {
-                        panic!("Unknown opcode 0x{:08x}", opcode);
-                    }
+                    _ => illegal_instr,
                 }
             }
             OPCODE_SYSTEM => {
@@ -543,12 +524,10 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
                                     illegal_instr
                                 }
                             }
-                            _ => {
-                                panic!("Unknown MOP number {}", mop_number);
-                            }
+                            _ => illegal_instr,
                         }
                     } else {
-                        panic!();
+                        illegal_instr
                     }
                 } else if funct3 & ZICSR_MASK != 0 {
                     let csr_number = ITypeOpcode::imm(opcode);
@@ -652,19 +631,17 @@ pub fn preprocess_bytecode<OPT: DecodingOptions>(bytecode: &[u32]) -> Vec<Instru
                             // It is canonical CSR to encode UNIMP instruction
                             illegal_instr
                         }
-                        _ => {
-                            panic!("Unknown CSR number 0x{:04x}", csr_number);
-                        }
+                        _ => illegal_instr,
                     };
 
                     if funct3 != 0b001 {
-                        // not CSRRW
-                        panic!("Unknown opcode 0x{:08x}", opcode);
+                        // not CSRRW — treat as illegal
+                        illegal_instr
+                    } else {
+                        instr
                     }
-
-                    instr
                 } else {
-                    panic!("Unknown system funct3 enc 0x{:08x}", funct3);
+                    illegal_instr
                 };
 
                 instr
@@ -717,4 +694,62 @@ impl DecodingOptions for DebugReducedMachineDecoderConfig {
     const SUPPORT_MUL_DIV: bool = false;
     const SUPPORT_SIGNED_MUL_DIV: bool = false;
     const SUPPORT_SUBWORD_MEM_ACCESS: bool = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unknown opcodes should decode as Illegal instructions, not panic.
+    #[test]
+    fn unknown_opcode_decodes_as_illegal() {
+        // 0xDEADBEEF has opcode bits 0b1101111 which is JAL, but with a garbage
+        // immediate. Use a truly invalid opcode: lowest 2 bits = 0b00 is a
+        // compressed instruction (not supported), and 0x00000000 is also invalid.
+        // A word with opcode bits 0b1111111 is not assigned in RV32.
+        let garbage: &[u32] = &[0xFFFFFFFF, 0x00000000, 0xDEAD_D633];
+        // Should not panic
+        let instructions = preprocess_bytecode::<FullMachineDecoderConfig>(garbage);
+        assert_eq!(instructions.len(), 3);
+        for instr in &instructions {
+            assert_eq!(
+                instr.name,
+                InstructionName::Illegal,
+                "Expected unknown opcode to decode as Illegal"
+            );
+        }
+    }
+
+    /// Executing an Illegal instruction must panic at runtime.
+    #[test]
+    #[should_panic(expected = "Illegal instruction")]
+    fn executing_illegal_instruction_panics() {
+        use crate::vm::{
+            DelegationsCounters, RamWithRomRegion, SimpleTape, State, VM,
+        };
+
+        // Build a tape with a single Illegal instruction
+        let illegal = Instruction::from_imm(InstructionName::Illegal, 0, 0, 0, 0);
+        let instructions = vec![illegal];
+        let tape = SimpleTape::new(&instructions);
+
+        // Minimal 4 KB RAM
+        use crate::vm::Register;
+        let ram_words = 4096 / core::mem::size_of::<u32>();
+        let backing = vec![Register { value: 0, timestamp: 0 }; ram_words];
+        let mut ram = RamWithRomRegion::<5> { backing };
+
+        let mut state = State::initial_with_counters(DelegationsCounters::default());
+        state.pc = 0;
+
+        // This should panic with "Illegal instruction encounteted"
+        VM::<DelegationsCounters>::run_basic_unrolled(
+            &mut state,
+            &mut ram,
+            &mut (),
+            &tape,
+            1,
+            &mut (),
+        );
+    }
 }
